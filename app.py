@@ -64,9 +64,8 @@ if user_query:
                                 june_growth = ((june_2025 - june_2024) / june_2024) * 100 if june_2024 else 0
                                 ytd_growth = ((ytd_2025 - ytd_2024) / ytd_2024) * 100 if ytd_2024 else 0
 
-                                # Zero Sales check
                                 last_3_months = [f"2025-{str(m).zfill(2)}" for m in [4, 5, 6] if f"2025-{str(m).zfill(2)}" in cat_row.index]
-                                zero_sales = pd.isna(cat_row.get("2025-06", 0)) or cat_row.get("2025-06", 0) == 0
+                                zero_sales = cat_row.get("2025-06", 0) == 0
                                 recent_sales = cat_row[last_3_months[:-1]].fillna(0) > 0
                                 zero_flag = "Yes" if zero_sales and recent_sales.sum() >= 2 else "No"
 
@@ -77,7 +76,6 @@ if user_query:
                                 st.subheader(f"📊 {category} Category Summary")
                                 st.table(summary_df.set_index(' '))
 
-                                # Monthly Sales Trend Table and Graph
                                 sales_cols = [col for col in cat_df.columns if '-' in col and cat_row.get(col) is not None]
                                 trend_df = pd.DataFrame({
                                     'Month': sales_cols,
@@ -89,7 +87,7 @@ if user_query:
                                 st.markdown(f"### Monthly {category} Sales Trend")
                                 st.dataframe(trend_df)
 
-                                fig, ax = plt.subplots()
+                                fig, ax = plt.subplots(figsize=(10, 3))
                                 ax.plot(trend_df['Month'], trend_df['Sales'], marker='o')
                                 for i, val in enumerate(trend_df['Sales']):
                                     ax.text(i, val, f"{val:,.0f}", ha='center', va='bottom', fontsize=8)
@@ -100,7 +98,6 @@ if user_query:
                                 ax.spines['left'].set_visible(False)
                                 st.pyplot(fig)
 
-                    # AI Summary
                     combined_sales = []
                     for sheet_name, df in sheets.items():
                         if 'Outlet ID' in df.columns and outlet_row['Outlet ID'] in df['Outlet ID'].astype(str).values:
