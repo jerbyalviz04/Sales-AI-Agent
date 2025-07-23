@@ -8,7 +8,8 @@ client = OpenAI(api_key="sk-proj-CPY2RURDPz-pWatOOb9RuwUJ-JsdfII2jSsVGh7ZdG-yyUy
 st.set_page_config(page_title="Sales AI Agent", layout="wide")
 st.title("💬 Sales AI Agent Chat")
 
-file_path = r"C:\\Users\\41419\\Desktop\\Insights\\AI Test Folder\\MT Sales Raw Data.xlsx"
+file_path = "MT Sales Raw Data.xlsx"
+
 try:
     sheets = pd.read_excel(file_path, sheet_name=None)
     for sheet in sheets.values():
