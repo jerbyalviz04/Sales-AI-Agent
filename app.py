@@ -43,92 +43,100 @@ if user_query:
                 for _, outlet_row in matched_rows.iterrows():
                     context = f"Outlet: {outlet_row.get('Outlet Name', 'N/A')} | Channel: {outlet_row.get('Customer Channel', 'N/A')} | Segment: {outlet_row.get('Customer Segment', 'N/A')} | Status: {outlet_row.get('Customer Status', 'N/A')} | Warehouse: {outlet_row.get('Warehouse', 'N/A')}"
 
-                    sales_cols = [col for col in df.columns if '-' in col]
-                    sales_data = outlet_row[sales_cols]
-                    sales_df = pd.DataFrame({
-                        'Month': sales_cols,
-                        'Sales': sales_data.values
-                    })
+                    st.markdown(f"**{context}**")
 
-                    # Convert to numeric for calculations
-                    sales_df['Sales'] = pd.to_numeric(sales_df['Sales'], errors='coerce')
+                    category_summaries = []
 
-                    # Calculate Category Summaries
-                    if sheet_name.lower() in ['lrb sales', 'csd sales', 'water sales']:
-                        current_year = '2025'
-                        previous_year = '2024'
+                    for category in ['LRB Sales', 'CSD Sales', 'Water Sales']:
+                        if category in sheets:
+                            cat_df = sheets[category]
+                            cat_row = cat_df[cat_df['Outlet ID'].astype(str).str.strip() == outlet_row['Outlet ID']]
+                            if not cat_row.empty:
+                                cat_row = cat_row.iloc[0]
+                                current_year = '2025'
+                                previous_year = '2024'
 
-                        june_2025 = outlet_row.get('2025-06', None)
-                        june_2024 = outlet_row.get('2024-06', None)
-                        ytd_2025 = outlet_row[[f"2025-{str(m).zfill(2)}" for m in range(1, 7)]].sum()
-                        ytd_2024 = outlet_row[[f"2024-{str(m).zfill(2)}" for m in range(1, 7)]].sum()
+                                june_2025 = cat_row.get('2025-06', 0)
+                                june_2024 = cat_row.get('2024-06', 0)
+                                ytd_2025 = cat_row[[f"2025-{str(m).zfill(2)}" for m in range(1, 7)]].sum()
+                                ytd_2024 = cat_row[[f"2024-{str(m).zfill(2)}" for m in range(1, 7)]].sum()
 
-                        june_growth = ((june_2025 - june_2024) / june_2024) * 100 if pd.notna(june_2025) and pd.notna(june_2024) and june_2024 != 0 else None
-                        ytd_growth = ((ytd_2025 - ytd_2024) / ytd_2024) * 100 if pd.notna(ytd_2025) and pd.notna(ytd_2024) and ytd_2024 != 0 else None
+                                june_growth = ((june_2025 - june_2024) / june_2024) * 100 if june_2024 else 0
+                                ytd_growth = ((ytd_2025 - ytd_2024) / ytd_2024) * 100 if ytd_2024 else 0
 
-                        st.subheader(f"📊 {sheet_name} Category Summary")
-                        st.markdown(f"**June 2025 Sales:** {june_2025:,.0f}")
-                        st.markdown(f"**June 2024 Sales:** {june_2024:,.0f}")
-                        st.markdown(f"**June Growth % vs LY:** {june_growth:.1f}%")
-                        st.markdown(f"**YTD Growth % (Jan–Jun):** {ytd_growth:.1f}%")
+                                # Zero Sales check
+                                last_3_months = [f"2025-{str(m).zfill(2)}" for m in [4, 5, 6] if f"2025-{str(m).zfill(2)}" in cat_row.index]
+                                zero_sales = pd.isna(cat_row.get("2025-06", 0)) or cat_row.get("2025-06", 0) == 0
+                                recent_sales = cat_row[last_3_months[:-1]].fillna(0) > 0
+                                zero_flag = "Yes" if zero_sales and recent_sales.sum() >= 2 else "No"
 
-                        # Zero Sales: No sales this month but sales in at least 2 of the last 3 months
-                        last_3_months = [f"2025-{str(m).zfill(2)}" for m in [4, 5, 6] if f"2025-{str(m).zfill(2)}" in outlet_row.index]
-                        zero_sales = pd.isna(outlet_row[f"2025-06"]) or outlet_row[f"2025-06"] == 0
-                        recent_sales = outlet_row[last_3_months[:-1]].fillna(0) > 0
-                        if zero_sales and recent_sales.sum() >= 2:
-                            st.markdown("**Zero Sales Flag:** Yes")
-                        else:
-                            st.markdown("**Zero Sales Flag:** No")
+                                summary_df = pd.DataFrame({
+                                    ' ': ['June 2025', 'June 2024', 'June Growth %', 'YTD Growth %', 'Zero Sales Flag'],
+                                    category: [f"{june_2025:,.0f}", f"{june_2024:,.0f}", f"{june_growth:.1f}%", f"{ytd_growth:.1f}%", zero_flag]
+                                })
+                                st.subheader(f"📊 {category} Category Summary")
+                                st.table(summary_df.set_index(' '))
 
-                        # Monthly Trend Table
-                        st.markdown("---")
-                        st.subheader(f"📈 Monthly {sheet_name} Sales Trend")
+                                # Monthly Sales Trend Table and Graph
+                                sales_cols = [col for col in cat_df.columns if '-' in col and cat_row.get(col) is not None]
+                                trend_df = pd.DataFrame({
+                                    'Month': sales_cols,
+                                    'Sales': [cat_row[col] for col in sales_cols]
+                                })
+                                trend_df['Sales'] = pd.to_numeric(trend_df['Sales'], errors='coerce')
+                                trend_df.dropna(inplace=True)
 
-                        trend_df = pd.DataFrame({
-                            'Month': sales_cols,
-                            'Sales': sales_data.values
-                        })
-                        trend_df['Sales'] = pd.to_numeric(trend_df['Sales'], errors='coerce')
-                        trend_df.dropna(inplace=True)
+                                st.markdown(f"### Monthly {category} Sales Trend")
+                                st.dataframe(trend_df)
 
-                        st.dataframe(trend_df)
+                                fig, ax = plt.subplots()
+                                ax.plot(trend_df['Month'], trend_df['Sales'], marker='o')
+                                for i, val in enumerate(trend_df['Sales']):
+                                    ax.text(i, val, f"{val:,.0f}", ha='center', va='bottom', fontsize=8)
+                                ax.set_xticks(range(len(trend_df['Month'])))
+                                ax.set_xticklabels(trend_df['Month'], rotation=45)
+                                ax.set_ylabel("Sales")
+                                ax.set_title(f"Monthly {category} Sales Trend")
+                                ax.spines['left'].set_visible(False)
+                                st.pyplot(fig)
 
-                        # Plot trend
-                        fig, ax = plt.subplots()
-                        ax.plot(trend_df['Month'], trend_df['Sales'], marker='o')
-                        for i, val in enumerate(trend_df['Sales']):
-                            ax.text(i, val, f"{val:,.0f}", ha='center', va='bottom', fontsize=8)
-                        ax.set_xticks(range(len(trend_df['Month'])))
-                        ax.set_xticklabels(trend_df['Month'], rotation=45)
-                        ax.set_ylabel("Sales")
-                        ax.set_title(f"Monthly {sheet_name} Sales Trend")
-                        ax.spines['left'].set_visible(False)
-                        st.pyplot(fig)
+                    # AI Summary
+                    combined_sales = []
+                    for sheet_name, df in sheets.items():
+                        if 'Outlet ID' in df.columns and outlet_row['Outlet ID'] in df['Outlet ID'].astype(str).values:
+                            row = df[df['Outlet ID'].astype(str) == str(outlet_row['Outlet ID'])].iloc[0]
+                            sales_cols = [col for col in df.columns if '-' in col]
+                            row_sales = pd.DataFrame({
+                                'Month': sales_cols,
+                                'Sales': row[sales_cols].values
+                            })
+                            row_sales['Sales'] = pd.to_numeric(row_sales['Sales'], errors='coerce')
+                            row_sales.dropna(inplace=True)
+                            row_sales['Sales'] = row_sales['Sales'].apply(lambda x: f"{x:,.0f}")
+                            combined_sales.append(row_sales)
 
-                    # AI summary
-                    formatted_df = sales_df.copy()
-                    formatted_df['Sales'] = formatted_df['Sales'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "0")
-                    top_sales = formatted_df.to_csv(index=False)
+                    if combined_sales:
+                        merged = pd.concat(combined_sales)
+                        merged_summary = merged.to_csv(index=False)
 
-                    prompt = (
-                        f"You are a sales data analyst.\n"
-                        f"Context: {context}\n"
-                        f"Here are the monthly sales data:\n{top_sales}\n"
-                        f"Provide a summary of sales performance for this outlet."
-                    )
-
-                    try:
-                        response = client.chat.completions.create(
-                            model="gpt-3.5-turbo",
-                            messages=[{"role": "user", "content": prompt}],
-                            temperature=0
+                        prompt = (
+                            f"You are a sales data analyst.\n"
+                            f"Context: {context}\n"
+                            f"Here are the monthly sales data:\n{merged_summary}\n"
+                            f"Provide a summary of sales performance for this outlet."
                         )
-                        ai_answer = response.choices[0].message.content.strip()
-                        st.chat_message("assistant").markdown(ai_answer)
 
-                    except Exception as e:
-                        st.chat_message("assistant").markdown(f"⚠️ OpenAI API error: {e}")
+                        try:
+                            response = client.chat.completions.create(
+                                model="gpt-3.5-turbo",
+                                messages=[{"role": "user", "content": prompt}],
+                                temperature=0
+                            )
+                            ai_answer = response.choices[0].message.content.strip()
+                            st.chat_message("assistant").markdown(ai_answer)
+                        except Exception as e:
+                            st.chat_message("assistant").markdown(f"⚠️ OpenAI API error: {e}")
                 break
+
     if not found:
         st.chat_message("assistant").markdown(f"🔍 No outlet matching '{user_query}' found in any sheet.")
