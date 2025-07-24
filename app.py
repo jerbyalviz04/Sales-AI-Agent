@@ -1,19 +1,17 @@
 import streamlit as st
 import pandas as pd
-import speech_recognition as sr
-from openai import OpenAI
 import matplotlib.pyplot as plt
+from openai import OpenAI
 
 # Initialize OpenAI client
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-st.set_page_config(page_title="Sales AI Agent", layout="wide")
-
-st.markdown("## 💬 Sales AI Agent Chat")
+st.set_page_config(page_title="Sales AI Agent Chat", layout="wide")
+st.title("💬 Sales AI Agent Chat")
 st.markdown("Hi Jerby! 👋 How can I help you today?")
 
+# Load Excel file
 file_path = "MT Sales Raw Data.xlsx"
-
 try:
     sheets = pd.read_excel(file_path, sheet_name=None, engine="openpyxl")
     for sheet in sheets.values():
@@ -22,148 +20,149 @@ except Exception as e:
     st.error(f"Failed to load data: {e}")
     st.stop()
 
-col1, col2 = st.columns([4, 1])
-with col1:
-    user_input = st.text_input("Type your outlet ID or name (e.g. Outlet001)")
+# Manual input (works with voice-to-text on phone)
+user_input = st.text_input("Enter Outlet ID or Name (use voice input via your keyboard mic)")
+if not user_input:
+    st.stop()
 
-with col2:
-    if st.button("🎤 Voice Input"):
-        recognizer = sr.Recognizer()
-        with sr.Microphone() as source:
-            st.info("Listening... Please speak.")
+# Search and display outlet info
+found = False
+for sheet_name, df in sheets.items():
+    if 'Outlet ID' not in df.columns:
+        continue
+
+    matched_rows = df[
+        (df['Outlet ID'].astype(str).str.strip() == user_input.strip()) |
+        (df['Outlet Name'].astype(str).str.strip().str.lower() == user_input.strip().lower())
+    ]
+    if not matched_rows.empty:
+        found = True
+        outlet_row = matched_rows.iloc[0]
+
+        st.subheader(f"Performance Dashboard for: {outlet_row['Outlet Name']} ({outlet_row['Outlet ID']})")
+
+        st.markdown(f"**Head Office Name:** {outlet_row.get('Head Office Name', 'N/A')}")
+        head_office = outlet_row.get('Head Office Name')
+        if head_office:
+            total_branches = df[df['Head Office Name'].astype(str).str.strip() == str(head_office).strip()].shape[0]
+            st.markdown(f"**Total Branches under this Head Office:** {total_branches}")
+
+        st.markdown(f"**Channel:** {outlet_row.get('Customer Channel', 'N/A')}")
+        st.markdown(f"**Segment:** {outlet_row.get('Customer Segment', 'N/A')}")
+        st.markdown(f"**Status:** {outlet_row.get('Customer Status', 'N/A')}")
+        st.markdown(f"**Warehouse:** {outlet_row.get('Warehouse', 'N/A')}")
+
+        # Monthly Sales Trend Table
+        sales_cols = sorted([col for col in df.columns if col[:4].isdigit() and len(col) == 7])
+        sales_data = outlet_row[sales_cols].fillna(0)
+        sales_df = pd.DataFrame({"Month": sales_cols, "Sales": sales_data.values})
+        sales_df['Sales'] = sales_df['Sales'].map('{:,.0f}'.format)
+
+        st.subheader("📈 Monthly Sales Trend")
+        st.dataframe(sales_df)
+
+        # LRB Chart
+        if "LRB Sales" in sheets:
+            lrb_df = sheets["LRB Sales"]
+            lrb_match = lrb_df[
+                (lrb_df['Outlet ID'].astype(str).str.strip() == str(outlet_row['Outlet ID']).strip())
+            ]
+            if not lrb_match.empty:
+                st.subheader("📊 LRB Sales Monthly Trend")
+                lrb_sales_cols = sorted([col for col in lrb_df.columns if col[:4].isdigit() and len(col) == 7])
+                lrb_sales_data = lrb_match.iloc[0][lrb_sales_cols].fillna(0)
+
+                fig, ax = plt.subplots(figsize=(10, 4))
+                ax.plot(lrb_sales_cols, lrb_sales_data.values, marker='o')
+                ax.set_title("LRB Sales Trend")
+                ax.set_xlabel("Month")
+                ax.yaxis.set_visible(False)
+                ax.tick_params(axis='x', rotation=45)
+                for x, y in zip(lrb_sales_cols, lrb_sales_data.values):
+                    ax.text(x, y, f"{y:,.0f}", ha='center', va='bottom', fontsize=9)
+                st.pyplot(fig)
+
+        # AI QA
+        question = st.text_input("Ask a sales-related question about this outlet:")
+        if st.button("Get AI Answer"):
+            context = f"Outlet: {outlet_row.get('Outlet Name')} | Channel: {outlet_row.get('Customer Channel')}"
+            prompt = (
+                f"You are a sales data analyst.\nContext: {context}\n"
+                f"Here are the monthly sales data:\n{sales_df.to_csv(index=False)}\n"
+                f"Question: {question}\nProvide a detailed and precise answer."
+            )
             try:
-                audio = recognizer.listen(source, timeout=10, phrase_time_limit=15)
-                user_input = recognizer.recognize_google(audio).strip()
-                st.success(f"You said: {user_input}")
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0
+                )
+                st.markdown("### 🧠 AI Agent Answer")
+                st.write(response.choices[0].message.content.strip())
             except Exception as e:
-                st.error(f"Voice input error: {e}")
+                st.error(f"OpenAI API error: {e}")
+        break
 
-if user_input:
-    found = False
-    for sheet_name, df in sheets.items():
-        if "Outlet ID" not in df.columns:
-            continue
+if not found:
+    st.warning(f"No outlet matching '{user_input}' found.")
 
-        matched = df[
-            (df["Outlet ID"].astype(str).str.strip() == user_input.strip()) |
-            (df["Outlet Name"].astype(str).str.strip().str.lower() == user_input.strip().lower())
-        ]
-        if not matched.empty:
-            found = True
-            for _, row in matched.iterrows():
-                st.markdown(f"### 🏪 Outlet: {row['Outlet Name']} ({row['Outlet ID']})")
+# Category Summary Table
+st.subheader("📦 Category Summary")
+current_month = "2025-06"
+previous_year = "2024"
+current_year = "2025"
+summary_data = []
 
-                st.markdown(f"**Head Office:** {row.get('Head Office Name', 'N/A')}")
-                ho_name = row.get('Head Office Name', None)
-                if ho_name:
-                    total_branches = df[df['Head Office Name'].astype(str).str.strip() == str(ho_name).strip()].shape[0]
-                    st.markdown(f"**Total Branches under Head Office:** {total_branches}")
-                st.markdown(f"**Channel:** {row.get('Customer Channel', 'N/A')}")
-                st.markdown(f"**Segment:** {row.get('Customer Segment', 'N/A')}")
-                st.markdown(f"**Status:** {row.get('Customer Status', 'N/A')}")
-                st.markdown(f"**Warehouse:** {row.get('Warehouse', 'N/A')}")
+for sheet_name, df in sheets.items():
+    if 'Outlet ID' not in df.columns:
+        continue
+    sales_cols = sorted([col for col in df.columns if col[:4].isdigit() and len(col) == 7])
+    current_month_col = current_month
+    last_year_month_col = current_month.replace(current_year, previous_year)
+    if current_month_col not in df.columns or last_year_month_col not in df.columns:
+        continue
 
-                sales_cols = sorted([col for col in df.columns if col[:4].isdigit() and len(col) == 7])
-                sales_data = row[sales_cols].fillna(0)
-                sales_df = pd.DataFrame({"Month": sales_cols, "Sales": sales_data.values})
-                sales_df["Sales"] = sales_df["Sales"].map("{:,.0f}".format)
+    df_outlet = df[
+        (df['Outlet ID'].astype(str).str.strip() == user_input.strip()) |
+        (df['Outlet Name'].astype(str).str.strip().str.lower() == user_input.strip().lower())
+    ]
+    if df_outlet.empty:
+        continue
 
-                st.markdown("#### 📈 Monthly Sales Trend")
-                st.dataframe(sales_df)
+    current_month_sales = df_outlet[current_month_col].values[0]
+    last_year_month_sales = df_outlet[last_year_month_col].values[0]
+    month_growth = (current_month_sales / last_year_month_sales - 1) * 100 if last_year_month_sales else 0.0
 
-                # LRB Sales Chart
-                if "LRB Sales" in sheets:
-                    lrb_df = sheets["LRB Sales"]
-                    lrb_match = lrb_df[lrb_df["Outlet ID"].astype(str).str.strip() == str(row["Outlet ID"]).strip()]
-                    if not lrb_match.empty:
-                        lrb_cols = sorted([col for col in lrb_df.columns if col[:4].isdigit()])
-                        lrb_sales = lrb_match.iloc[0][lrb_cols].fillna(0)
+    ytd_months_current = [f"{current_year}-{str(m).zfill(2)}" for m in range(1, int(current_month[-2:]) + 1)]
+    ytd_months_previous = [f"{previous_year}-{str(m).zfill(2)}" for m in range(1, int(current_month[-2:]) + 1)]
+    ytd_months_current = [m for m in ytd_months_current if m in df_outlet.columns]
+    ytd_months_previous = [m for m in ytd_months_previous if m in df_outlet.columns]
+    ytd_current = df_outlet[ytd_months_current].sum(axis=1).values[0]
+    ytd_previous = df_outlet[ytd_months_previous].sum(axis=1).values[0]
+    ytd_growth = (ytd_current / ytd_previous - 1) * 100 if ytd_previous else 0.0
 
-                        fig, ax = plt.subplots(figsize=(10, 3))
-                        ax.plot(lrb_cols, lrb_sales.values, marker="o")
-                        ax.set_title("LRB Monthly Sales Trend")
-                        ax.set_xlabel("Month")
-                        ax.tick_params(axis='x', rotation=45)
-                        ax.yaxis.set_visible(False)
+    zero_sales_outlets = 0
+    for _, row in df.iterrows():
+        if row.get(current_month_col, 0) == 0:
+            prev_sales = []
+            for offset in range(1, 4):
+                month_int = int(current_month[-2:]) - offset
+                if month_int > 0:
+                    prev_month = f"{current_year}-{str(month_int).zfill(2)}"
+                    if prev_month in df.columns:
+                        prev_sales.append(row.get(prev_month, 0) > 0)
+            if sum(prev_sales) >= 2:
+                zero_sales_outlets += 1
 
-                        for x, y in zip(lrb_cols, lrb_sales.values):
-                            ax.text(x, y, f"{y:,.0f}", ha="center", va="bottom", fontsize=8)
-                        st.pyplot(fig)
+    summary_data.append({
+        "Category": sheet_name,
+        f"{current_month} Growth % vs LY": f"{month_growth:.1f}%",
+        "YTD Growth %": f"{ytd_growth:.1f}%",
+        "Zero Sales Outlets": zero_sales_outlets
+    })
 
-                question = st.text_input("❓ Ask a question about this outlet:")
-                if st.button("💡 Get AI Answer"):
-                    context = (
-                        f"Outlet: {row.get('Outlet Name')} | Channel: {row.get('Customer Channel')} | "
-                        f"Segment: {row.get('Customer Segment')} | Warehouse: {row.get('Warehouse')}"
-                    )
-                    sales_csv = sales_df.to_csv(index=False)
+if summary_data:
+    summary_df = pd.DataFrame(summary_data)
+    st.dataframe(summary_df)
 
-                    prompt = (
-                        f"You are a smart sales data analyst.\n"
-                        f"Outlet Details: {context}\n"
-                        f"Sales Data:\n{sales_csv}\n"
-                        f"Question: {question}\n"
-                        f"Answer in clear, structured format."
-                    )
-                    try:
-                        response = client.chat.completions.create(
-                            model="gpt-3.5-turbo",
-                            messages=[{"role": "user", "content": prompt}],
-                            temperature=0.2
-                        )
-                        st.markdown("### 🧠 AI Response")
-                        st.write(response.choices[0].message.content.strip())
-                    except Exception as e:
-                        st.error(f"OpenAI API Error: {e}")
-            break
-
-    if not found:
-        st.warning("❗ No matching outlet found.")
-
-    # Category Summary
-    st.markdown("### 📦 Category Summary")
-    month = "2025-06"
-    year = "2025"
-    last_year = "2024"
-
-    summary = []
-    for name, df in sheets.items():
-        if "Outlet ID" not in df.columns or month not in df.columns:
-            continue
-
-        outlet_df = df[
-            (df["Outlet ID"].astype(str).str.strip() == user_input.strip()) |
-            (df["Outlet Name"].astype(str).str.strip().str.lower() == user_input.strip().lower())
-        ]
-        if outlet_df.empty:
-            continue
-
-        # Growth %
-        current = outlet_df[month].values[0]
-        prev = outlet_df[month.replace(year, last_year)].values[0] if month.replace(year, last_year) in df.columns else 0
-        growth = (current / prev - 1) * 100 if prev != 0 else 0
-
-        # YTD
-        ytd_months = [f"{year}-{str(i).zfill(2)}" for i in range(1, 7)]
-        ytd_last = [f"{last_year}-{str(i).zfill(2)}" for i in range(1, 7)]
-        ytd_cur = outlet_df[ytd_months].sum(axis=1).values[0] if all(m in df.columns for m in ytd_months) else 0
-        ytd_old = outlet_df[ytd_last].sum(axis=1).values[0] if all(m in df.columns for m in ytd_last) else 0
-        ytd_growth = (ytd_cur / ytd_old - 1) * 100 if ytd_old != 0 else 0
-
-        # Zero Sales (in full sheet)
-        zero = 0
-        for i, r in df.iterrows():
-            if r.get(month, 0) == 0:
-                count = sum([r.get(f"{year}-{str(m).zfill(2)}", 0) > 0 for m in range(3, 6)])
-                if count >= 2:
-                    zero += 1
-
-        summary.append({
-            "Category": name,
-            f"{month} Growth % vs LY": f"{growth:.1f}%",
-            "YTD Growth %": f"{ytd_growth:.1f}%",
-            "Zero Sales Outlets": zero
-        })
-
-    if summary:
-        st.dataframe(pd.DataFrame(summary))
+st.caption("Built with ❤️ by Jerby & ChatGPT")
