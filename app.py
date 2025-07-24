@@ -1,113 +1,160 @@
 import streamlit as st
 import pandas as pd
-import openai
-import os
-from datetime import datetime
+from openai import OpenAI
+import matplotlib.pyplot as plt
 
-# Load all category sheets into a dictionary of DataFrames
-@st.cache_data
-def load_all_data(file_path):
-    xl = pd.ExcelFile(file_path)
-    data_dict = {}
-    for sheet_name in xl.sheet_names:
-        df = xl.parse(sheet_name)
-        df['Category'] = sheet_name  # Add a column to identify the category
-        data_dict[sheet_name] = df
-    return data_dict
+# Initialize OpenAI client
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# Match outlet by normalized name or ID
-def get_outlet_data(df, outlet_query):
-    outlet_query = outlet_query.replace(" ", "").lower().strip()
-    df['Normalized Name'] = df['Outlet Name'].astype(str).str.replace(" ", "").str.lower().str.strip()
-    df['Normalized ID'] = df['Outlet ID'].astype(str).str.strip()
-    match = df[(df['Normalized Name'] == outlet_query) | (df['Normalized ID'] == outlet_query)]
-    return match
+st.set_page_config(page_title="Sales AI Agent", layout="wide")
 
-# Generate performance summary for an outlet
-def generate_outlet_summary(df, outlet_name):
-    if df.empty:
-        return f"No outlet matching '{outlet_name}' found."
-
-    outlet_id = df.iloc[0]['Outlet ID']
-    head_office = df.iloc[0]['Head Office']
-    category = df.iloc[0]['Category']
-
-    current_month = df.iloc[0]['Month']
-    cm_sales = df.iloc[0]['Current Month Sales']
-    ly_sales = df.iloc[0]['Sales Last Year Same Month']
-    ytd_sales = df.iloc[0]['YTD Sales']
-    ytd_ly_sales = df.iloc[0]['YTD Sales Last Year']
-
-    cm_growth = ((cm_sales - ly_sales) / ly_sales) * 100 if ly_sales != 0 else 0
-    ytd_growth = ((ytd_sales - ytd_ly_sales) / ytd_ly_sales) * 100 if ytd_ly_sales != 0 else 0
-
-    ho_count = df[df['Head Office'] == head_office]['Outlet ID'].nunique()
-
-    summary = f"""
-    📌 Outlet Performance for **{df.iloc[0]['Outlet Name']}**  
-    🏷️ Head Office: **{head_office}** (Total Branches: {ho_count})  
-    📦 Category: **{category}**  
-    📅 Current Month: **{current_month}**  
-
-    **Sales Performance:**  
-    - Current Month Sales: {cm_sales:,.0f}  
-    - Last Year Same Month Sales: {ly_sales:,.0f}  
-    - % Growth vs LY (Month): **{cm_growth:.1f}%**  
-    - YTD Sales: {ytd_sales:,.0f}  
-    - YTD Sales Last Year: {ytd_ly_sales:,.0f}  
-    - % Growth YTD: **{ytd_growth:.1f}%**
-    """
-    return summary
-
-# Generate category summary
-
-def generate_category_summary(data_dict):
-    summary = "## 📦 Category Summary\n"
-    for category, df in data_dict.items():
-        current = df.iloc[0]['Current Month']
-        prev_year = df.iloc[0]['Previous Year Month']
-
-        cm_sales = df['Current Month Sales'].sum()
-        ly_sales = df['Sales Last Year Same Month'].sum()
-        ytd_sales = df['YTD Sales'].sum()
-        ytd_ly_sales = df['YTD Sales Last Year'].sum()
-
-        cm_growth = ((cm_sales - ly_sales) / ly_sales) * 100 if ly_sales != 0 else 0
-        ytd_growth = ((ytd_sales - ytd_ly_sales) / ytd_ly_sales) * 100 if ytd_ly_sales != 0 else 0
-
-        # Zero Sales Logic: no sales this month but with at least 2 of last 3 months
-        zero_sales_outlets = df[
-            (df['Current Month Sales'] == 0) &
-            (df[['M-1 Sales', 'M-2 Sales', 'M-3 Sales']] > 0).sum(axis=1) >= 2
-        ]
-
-        zero_sales_count = zero_sales_outlets['Outlet ID'].nunique()
-
-        summary += f"""
-**{category}**  
-- % Growth vs LY (Month): **{cm_growth:.1f}%**  
-- % Growth YTD: **{ytd_growth:.1f}%**  
-- Zero Sales Outlets: **{zero_sales_count}**\n\n"""
-    return summary
-
-# Load data
-st.set_page_config(page_title="Sales AI Agent", page_icon="💬")
-st.title("💬 Sales AI Agent Chat")
+st.markdown("## 💬 Sales AI Agent Chat")
 st.markdown("Hi Jerby! 👋 How can I help you today?")
 
-uploaded_file = "MT Raw Data_Updated.xlsx"
-data_dict = load_all_data(uploaded_file)
-all_data = pd.concat(data_dict.values(), ignore_index=True)
+file_path = "MT Sales Raw Data.xlsx"
 
-# User input
-query = st.text_input("Enter Outlet ID or Name (use voice input via your keyboard mic)")
+try:
+    sheets = pd.read_excel(file_path, sheet_name=None, engine="openpyxl")
+    for sheet in sheets.values():
+        sheet.columns = sheet.columns.str.strip()
+except Exception as e:
+    st.error(f"Failed to load data: {e}")
+    st.stop()
 
-if query:
-    outlet_df = get_outlet_data(all_data.copy(), query)
-    outlet_response = generate_outlet_summary(outlet_df, query)
-    st.markdown(outlet_response)
+col1, col2 = st.columns([4, 1])
+with col1:
+    user_input = st.text_input("Enter Outlet ID or Name (use voice input via keyboard mic)")
 
-# Category Summary
-st.markdown(generate_category_summary(data_dict))
-st.markdown("---")
-st.markdown("Built with ❤️ by Jerby & ChatGPT")
+# Normalize input
+normalized_input = user_input.strip().lower()
+
+if user_input:
+    found = False
+    for sheet_name, df in sheets.items():
+        if "Outlet ID" not in df.columns:
+            continue
+
+        df["Normalized ID"] = df["Outlet ID"].astype(str).str.strip().str.lower()
+        df["Normalized Name"] = df["Outlet Name"].astype(str).str.strip().str.lower()
+
+        matched = df[(df["Normalized ID"] == normalized_input) | (df["Normalized Name"] == normalized_input)]
+
+        if not matched.empty:
+            found = True
+            for _, row in matched.iterrows():
+                st.markdown(f"### 🏪 Outlet: {row['Outlet Name']} ({row['Outlet ID']})")
+
+                st.markdown(f"**Head Office:** {row.get('Head Office Name', 'N/A')}")
+                ho_name = row.get('Head Office Name', None)
+                if ho_name:
+                    total_branches = df[df['Head Office Name'].astype(str).str.strip() == str(ho_name).strip()].shape[0]
+                    st.markdown(f"**Total Branches under Head Office:** {total_branches}")
+                st.markdown(f"**Channel:** {row.get('Customer Channel', 'N/A')}")
+                st.markdown(f"**Segment:** {row.get('Customer Segment', 'N/A')}")
+                st.markdown(f"**Status:** {row.get('Customer Status', 'N/A')}")
+                st.markdown(f"**Warehouse:** {row.get('Warehouse', 'N/A')}")
+
+                sales_cols = sorted([col for col in df.columns if col[:4].isdigit() and len(col) == 7])
+                sales_data = row[sales_cols].fillna(0)
+                sales_df = pd.DataFrame({"Month": sales_cols, "Sales": sales_data.values})
+                sales_df["Sales"] = sales_df["Sales"].map("{:,.0f}".format)
+
+                st.markdown("#### 📈 Monthly Sales Trend")
+                st.dataframe(sales_df)
+
+                # LRB Sales Chart
+                if "LRB Sales" in sheets:
+                    lrb_df = sheets["LRB Sales"]
+                    lrb_match = lrb_df[lrb_df["Outlet ID"].astype(str).str.strip().str.lower() == row['Normalized ID']]
+                    if not lrb_match.empty:
+                        lrb_cols = sorted([col for col in lrb_df.columns if col[:4].isdigit()])
+                        lrb_sales = lrb_match.iloc[0][lrb_cols].fillna(0)
+
+                        fig, ax = plt.subplots(figsize=(10, 3))
+                        ax.plot(lrb_cols, lrb_sales.values, marker="o")
+                        ax.set_title("LRB Monthly Sales Trend")
+                        ax.set_xlabel("Month")
+                        ax.tick_params(axis='x', rotation=45)
+                        ax.yaxis.set_visible(False)
+
+                        for x, y in zip(lrb_cols, lrb_sales.values):
+                            ax.text(x, y, f"{y:,.0f}", ha="center", va="bottom", fontsize=8)
+                        st.pyplot(fig)
+
+                question = st.text_input("❓ Ask a question about this outlet:")
+                if st.button("💡 Get AI Answer"):
+                    context = (
+                        f"Outlet: {row.get('Outlet Name')} | Channel: {row.get('Customer Channel')} | "
+                        f"Segment: {row.get('Customer Segment')} | Warehouse: {row.get('Warehouse')}"
+                    )
+                    sales_csv = sales_df.to_csv(index=False)
+
+                    prompt = (
+                        f"You are a smart sales data analyst.\n"
+                        f"Outlet Details: {context}\n"
+                        f"Sales Data:\n{sales_csv}\n"
+                        f"Question: {question}\n"
+                        f"Answer in clear, structured format."
+                    )
+                    try:
+                        response = client.chat.completions.create(
+                            model="gpt-3.5-turbo",
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.2
+                        )
+                        st.markdown("### 🧠 AI Response")
+                        st.write(response.choices[0].message.content.strip())
+                    except Exception as e:
+                        st.error(f"OpenAI API Error: {e}")
+            break
+
+    if not found:
+        st.warning("❗ No matching outlet found.")
+
+    # Category Summary
+    st.markdown("### 📦 Category Summary")
+    month = "2025-06"
+    year = "2025"
+    last_year = "2024"
+
+    summary = []
+    for name, df in sheets.items():
+        if "Outlet ID" not in df.columns or month not in df.columns:
+            continue
+
+        df["Normalized ID"] = df["Outlet ID"].astype(str).str.strip().str.lower()
+        df["Normalized Name"] = df["Outlet Name"].astype(str).str.strip().str.lower()
+
+        outlet_df = df[(df["Normalized ID"] == normalized_input) | (df["Normalized Name"] == normalized_input)]
+        if outlet_df.empty:
+            continue
+
+        current = outlet_df[month].values[0]
+        prev_col = month.replace(year, last_year)
+        prev = outlet_df[prev_col].values[0] if prev_col in df.columns else 0
+        growth = (current / prev - 1) * 100 if prev != 0 else 0
+
+        ytd_months = [f"{year}-{str(i).zfill(2)}" for i in range(1, 7)]
+        ytd_last = [f"{last_year}-{str(i).zfill(2)}" for i in range(1, 7)]
+        ytd_cur = outlet_df[ytd_months].sum(axis=1).values[0] if all(m in df.columns for m in ytd_months) else 0
+        ytd_old = outlet_df[ytd_last].sum(axis=1).values[0] if all(m in df.columns for m in ytd_last) else 0
+        ytd_growth = (ytd_cur / ytd_old - 1) * 100 if ytd_old != 0 else 0
+
+        zero = 0
+        for _, r in df.iterrows():
+            if r.get(month, 0) == 0:
+                count = sum([r.get(f"{year}-{str(m).zfill(2)}", 0) > 0 for m in range(3, 6)])
+                if count >= 2:
+                    zero += 1
+
+        summary.append({
+            "Category": name,
+            f"{month} Growth % vs LY": f"{growth:.1f}%",
+            "YTD Growth %": f"{ytd_growth:.1f}%",
+            "Zero Sales Outlets": zero
+        })
+
+    if summary:
+        st.dataframe(pd.DataFrame(summary))
+
+# Note: Voice input handled via mobile mic keyboard. Removed PyAudio-based mic capture to avoid platform errors.
