@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import speech_recognition as sr
 from openai import OpenAI
 import matplotlib.pyplot as plt
 
@@ -11,12 +10,9 @@ st.set_page_config(page_title="Sales AI Agent", layout="wide")
 
 st.markdown("## 💬 Sales AI Agent Chat")
 st.markdown("Hi Jerby! 👋 How can I help you today?")
+st.markdown("Enter Outlet ID or Name (use voice input via your keyboard mic)")
 
 file_path = "MT Sales Raw Data.xlsx"
-
-# Helper function to normalize strings (lowercase + no spaces)
-def normalize(text):
-    return str(text).lower().replace(" ", "").strip()
 
 try:
     sheets = pd.read_excel(file_path, sheet_name=None, engine="openpyxl")
@@ -26,36 +22,22 @@ except Exception as e:
     st.error(f"Failed to load data: {e}")
     st.stop()
 
-col1, col2 = st.columns([4, 1])
-with col1:
-    user_input = st.text_input("Enter Outlet ID or Name (use voice input via your keyboard mic)")
-
-with col2:
-    if st.button("🎤 Voice Input"):
-        recognizer = sr.Recognizer()
-        with sr.Microphone() as source:
-            st.info("Listening... Please speak.")
-            try:
-                audio = recognizer.listen(source, timeout=10, phrase_time_limit=15)
-                user_input = recognizer.recognize_google(audio).strip()
-                st.success(f"You said: {user_input}")
-            except Exception as e:
-                st.error(f"Voice input error: {e}")
+user_input = st.text_input("")
 
 if user_input:
-    norm_input = normalize(user_input)
+    normalized_input = user_input.strip().lower().replace(" ", "")
     found = False
 
     for sheet_name, df in sheets.items():
-        if "Outlet ID" not in df.columns or "Outlet Name" not in df.columns:
+        if "Outlet ID" not in df.columns:
             continue
 
-        df["__id_norm"] = df["Outlet ID"].astype(str).apply(normalize)
-        df["__name_norm"] = df["Outlet Name"].astype(str).apply(normalize)
+        df["__id_norm"] = df["Outlet ID"].astype(str).str.strip().str.lower().str.replace(" ", "")
+        df["__name_norm"] = df["Outlet Name"].astype(str).str.strip().str.lower().str.replace(" ", "")
 
         matched = df[
-            (df["__id_norm"] == norm_input) |
-            (df["__name_norm"] == norm_input)
+            (df["__id_norm"] == normalized_input) |
+            (df["__name_norm"] == normalized_input)
         ]
 
         if not matched.empty:
@@ -141,26 +123,29 @@ if user_input:
         if "Outlet ID" not in df.columns or month not in df.columns:
             continue
 
-        df["__id_norm"] = df["Outlet ID"].astype(str).apply(normalize)
-        df["__name_norm"] = df["Outlet Name"].astype(str).apply(normalize)
+        df["__id_norm"] = df["Outlet ID"].astype(str).str.strip().str.lower().str.replace(" ", "")
+        df["__name_norm"] = df["Outlet Name"].astype(str).str.strip().str.lower().str.replace(" ", "")
 
         outlet_df = df[
-            (df["__id_norm"] == norm_input) |
-            (df["__name_norm"] == norm_input)
+            (df["__id_norm"] == normalized_input) |
+            (df["__name_norm"] == normalized_input)
         ]
         if outlet_df.empty:
             continue
 
+        # Growth %
         current = outlet_df[month].values[0]
         prev = outlet_df[month.replace(year, last_year)].values[0] if month.replace(year, last_year) in df.columns else 0
         growth = (current / prev - 1) * 100 if prev != 0 else 0
 
+        # YTD
         ytd_months = [f"{year}-{str(i).zfill(2)}" for i in range(1, 7)]
         ytd_last = [f"{last_year}-{str(i).zfill(2)}" for i in range(1, 7)]
         ytd_cur = outlet_df[ytd_months].sum(axis=1).values[0] if all(m in df.columns for m in ytd_months) else 0
         ytd_old = outlet_df[ytd_last].sum(axis=1).values[0] if all(m in df.columns for m in ytd_last) else 0
         ytd_growth = (ytd_cur / ytd_old - 1) * 100 if ytd_old != 0 else 0
 
+        # Zero Sales
         zero = 0
         for i, r in df.iterrows():
             if r.get(month, 0) == 0:
