@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import speech_recognition as sr
 from openai import OpenAI
 import matplotlib.pyplot as plt
 
@@ -10,9 +11,12 @@ st.set_page_config(page_title="Sales AI Agent", layout="wide")
 
 st.markdown("## 💬 Sales AI Agent Chat")
 st.markdown("Hi Jerby! 👋 How can I help you today?")
-st.markdown("Enter Outlet ID or Name (use voice input via your keyboard mic)")
 
 file_path = "MT Sales Raw Data.xlsx"
+
+# Helper function to normalize strings (lowercase + no spaces)
+def normalize(text):
+    return str(text).lower().replace(" ", "").strip()
 
 try:
     sheets = pd.read_excel(file_path, sheet_name=None, engine="openpyxl")
@@ -22,10 +26,21 @@ except Exception as e:
     st.error(f"Failed to load data: {e}")
     st.stop()
 
-user_input = st.text_input("")
+col1, col2 = st.columns([4, 1])
+with col1:
+    user_input = st.text_input("Enter Outlet ID or Name (use voice input via your keyboard mic)")
 
-def normalize(text):
-    return str(text).strip().lower().replace(" ", "")
+with col2:
+    if st.button("🎤 Voice Input"):
+        recognizer = sr.Recognizer()
+        with sr.Microphone() as source:
+            st.info("Listening... Please speak.")
+            try:
+                audio = recognizer.listen(source, timeout=10, phrase_time_limit=15)
+                user_input = recognizer.recognize_google(audio).strip()
+                st.success(f"You said: {user_input}")
+            except Exception as e:
+                st.error(f"Voice input error: {e}")
 
 if user_input:
     norm_input = normalize(user_input)
@@ -38,7 +53,10 @@ if user_input:
         df["__id_norm"] = df["Outlet ID"].astype(str).apply(normalize)
         df["__name_norm"] = df["Outlet Name"].astype(str).apply(normalize)
 
-        matched = df[(df["__id_norm"] == norm_input) | (df["__name_norm"] == norm_input)]
+        matched = df[
+            (df["__id_norm"] == norm_input) |
+            (df["__name_norm"] == norm_input)
+        ]
 
         if not matched.empty:
             found = True
@@ -66,8 +84,7 @@ if user_input:
                 # LRB Sales Chart
                 if "LRB Sales" in sheets:
                     lrb_df = sheets["LRB Sales"]
-                    lrb_df["__id_norm"] = lrb_df["Outlet ID"].astype(str).apply(normalize)
-                    lrb_match = lrb_df[lrb_df["__id_norm"] == normalize(row["Outlet ID"])]
+                    lrb_match = lrb_df[lrb_df["Outlet ID"].astype(str).str.strip() == str(row["Outlet ID"]).strip()]
                     if not lrb_match.empty:
                         lrb_cols = sorted([col for col in lrb_df.columns if col[:4].isdigit()])
                         lrb_sales = lrb_match.iloc[0][lrb_cols].fillna(0)
@@ -111,7 +128,7 @@ if user_input:
             break
 
     if not found:
-        st.warning(f"No outlet matching '{user_input}' found.")
+        st.warning("❗ No matching outlet found.")
 
     # Category Summary
     st.markdown("### 📦 Category Summary")
@@ -126,8 +143,11 @@ if user_input:
 
         df["__id_norm"] = df["Outlet ID"].astype(str).apply(normalize)
         df["__name_norm"] = df["Outlet Name"].astype(str).apply(normalize)
-        outlet_df = df[(df["__id_norm"] == norm_input) | (df["__name_norm"] == norm_input)]
 
+        outlet_df = df[
+            (df["__id_norm"] == norm_input) |
+            (df["__name_norm"] == norm_input)
+        ]
         if outlet_df.empty:
             continue
 
@@ -142,7 +162,7 @@ if user_input:
         ytd_growth = (ytd_cur / ytd_old - 1) * 100 if ytd_old != 0 else 0
 
         zero = 0
-        for _, r in df.iterrows():
+        for i, r in df.iterrows():
             if r.get(month, 0) == 0:
                 count = sum([r.get(f"{year}-{str(m).zfill(2)}", 0) > 0 for m in range(3, 6)])
                 if count >= 2:
