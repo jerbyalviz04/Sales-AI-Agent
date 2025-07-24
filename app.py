@@ -10,6 +10,7 @@ st.set_page_config(page_title="Sales AI Agent", layout="wide")
 
 st.markdown("## 💬 Sales AI Agent Chat")
 st.markdown("Hi Jerby! 👋 How can I help you today?")
+st.markdown("Enter Outlet ID or Name (use voice input via your keyboard mic)")
 
 file_path = "MT Sales Raw Data.xlsx"
 
@@ -21,23 +22,23 @@ except Exception as e:
     st.error(f"Failed to load data: {e}")
     st.stop()
 
-col1, col2 = st.columns([4, 1])
-with col1:
-    user_input = st.text_input("Enter Outlet ID or Name (use voice input via keyboard mic)")
+user_input = st.text_input("")
 
-# Normalize input
-normalized_input = user_input.strip().lower()
+def normalize(text):
+    return str(text).strip().lower().replace(" ", "")
 
 if user_input:
+    norm_input = normalize(user_input)
     found = False
+
     for sheet_name, df in sheets.items():
-        if "Outlet ID" not in df.columns:
+        if "Outlet ID" not in df.columns or "Outlet Name" not in df.columns:
             continue
 
-        df["Normalized ID"] = df["Outlet ID"].astype(str).str.strip().str.lower()
-        df["Normalized Name"] = df["Outlet Name"].astype(str).str.strip().str.lower()
+        df["__id_norm"] = df["Outlet ID"].astype(str).apply(normalize)
+        df["__name_norm"] = df["Outlet Name"].astype(str).apply(normalize)
 
-        matched = df[(df["Normalized ID"] == normalized_input) | (df["Normalized Name"] == normalized_input)]
+        matched = df[(df["__id_norm"] == norm_input) | (df["__name_norm"] == norm_input)]
 
         if not matched.empty:
             found = True
@@ -65,7 +66,8 @@ if user_input:
                 # LRB Sales Chart
                 if "LRB Sales" in sheets:
                     lrb_df = sheets["LRB Sales"]
-                    lrb_match = lrb_df[lrb_df["Outlet ID"].astype(str).str.strip().str.lower() == row['Normalized ID']]
+                    lrb_df["__id_norm"] = lrb_df["Outlet ID"].astype(str).apply(normalize)
+                    lrb_match = lrb_df[lrb_df["__id_norm"] == normalize(row["Outlet ID"])]
                     if not lrb_match.empty:
                         lrb_cols = sorted([col for col in lrb_df.columns if col[:4].isdigit()])
                         lrb_sales = lrb_match.iloc[0][lrb_cols].fillna(0)
@@ -109,7 +111,7 @@ if user_input:
             break
 
     if not found:
-        st.warning("❗ No matching outlet found.")
+        st.warning(f"No outlet matching '{user_input}' found.")
 
     # Category Summary
     st.markdown("### 📦 Category Summary")
@@ -122,16 +124,15 @@ if user_input:
         if "Outlet ID" not in df.columns or month not in df.columns:
             continue
 
-        df["Normalized ID"] = df["Outlet ID"].astype(str).str.strip().str.lower()
-        df["Normalized Name"] = df["Outlet Name"].astype(str).str.strip().str.lower()
+        df["__id_norm"] = df["Outlet ID"].astype(str).apply(normalize)
+        df["__name_norm"] = df["Outlet Name"].astype(str).apply(normalize)
+        outlet_df = df[(df["__id_norm"] == norm_input) | (df["__name_norm"] == norm_input)]
 
-        outlet_df = df[(df["Normalized ID"] == normalized_input) | (df["Normalized Name"] == normalized_input)]
         if outlet_df.empty:
             continue
 
         current = outlet_df[month].values[0]
-        prev_col = month.replace(year, last_year)
-        prev = outlet_df[prev_col].values[0] if prev_col in df.columns else 0
+        prev = outlet_df[month.replace(year, last_year)].values[0] if month.replace(year, last_year) in df.columns else 0
         growth = (current / prev - 1) * 100 if prev != 0 else 0
 
         ytd_months = [f"{year}-{str(i).zfill(2)}" for i in range(1, 7)]
@@ -156,5 +157,3 @@ if user_input:
 
     if summary:
         st.dataframe(pd.DataFrame(summary))
-
-# Note: Voice input handled via mobile mic keyboard. Removed PyAudio-based mic capture to avoid platform errors.
